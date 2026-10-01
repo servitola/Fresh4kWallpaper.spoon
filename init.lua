@@ -5,7 +5,7 @@ local obj = {}
 obj.__index = obj
 
 obj.name = "Fresh4kWallpaper"
-obj.version = "0.1.0"
+obj.version = "0.2.0"
 obj.author = "servitola"
 obj.homepage = "https://github.com/servitola/Fresh4kWallpaper.spoon"
 obj.license = "MIT - https://opensource.org/licenses/MIT"
@@ -15,11 +15,11 @@ local log = hs.logger.new("Fresh4kWallpaper", "info")
 
 --- Fresh4kWallpaper.sources
 --- Variable
---- GitHub folders with pictures: `"owner/repo"` or `"owner/repo/path"`. A folder that holds only
---- subfolders is a set of categories; one of them is picked at random.
+--- GitHub collections: `"owner/repo"` for every picture in a repository, `"owner/repo/path"`
+--- for one folder of it, subfolders included.
 obj.sources = {
     "AngelJumbo/gruvbox-wallpapers/wallpapers",
-    "Nix3l/gruvbox-bgs",
+    "Nix3l/wallpapers",
     "dharmx/walls",
     "makccr/wallpapers/wallpapers",
     "Ajaymanikandan0x/hyprland_wallpapers",
@@ -27,8 +27,8 @@ obj.sources = {
 
 --- Fresh4kWallpaper.dir
 --- Variable
---- Where the current wallpaper, `history.log` and `blocklist.txt` live. Only files this Spoon
---- wrote (`Fresh4kWallpaper-<time>.<ext>`) are ever deleted from it.
+--- Where the current wallpaper, `history.log`, `blocklist.txt` and the cached file lists live.
+--- Only files this Spoon wrote (`Fresh4kWallpaper-<time>.<ext>`) are ever deleted from it.
 obj.dir = os.getenv("HOME") .. "/Pictures/Fresh4kWallpaper"
 
 --- Fresh4kWallpaper.only4k
@@ -51,16 +51,34 @@ obj.changeOnStart = true
 --- How many recent pictures are not shown again.
 obj.historySize = 100
 
+--- Fresh4kWallpaper.cacheDays
+--- Variable
+--- How long the list of a collection's files is reused before GitHub is asked again.
+obj.cacheDays = 7
+
 --- Fresh4kWallpaper.token
 --- Variable
---- Optional GitHub token. Without one GitHub allows 60 listings an hour from your address;
---- a change takes two or three.
+--- Optional GitHub token. Not needed in normal use: one request per collection per `cacheDays`
+--- stays far below the 60 an hour GitHub allows without one.
 obj.token = nil
 
--- Listings per change (an empty or exhausted folder asks for another) and downloads per listing.
-local MAX_LISTINGS = 10
+-- Collections tried per change (an exhausted one asks for another) and downloads per collection.
+local MAX_SOURCES = 10
 local MAX_DOWNLOADS = 10
-local MAX_DEPTH = 3
+
+local function readAll(path)
+    local file = io.open(path, "r")
+    if not file then return nil end
+    local text = file:read("a")
+    file:close()
+    return text
+end
+
+local function writeAll(path, text)
+    local file = assert(io.open(path, "w"))
+    file:write(text)
+    file:close()
+end
 
 local function readLines(path)
     local lines = {}
@@ -97,64 +115,72 @@ end
 
 function obj:_current(run) return run == self._run end
 
-function obj:_list(run, repo, path, depth, done)
+-- done(collection) with { repo, paths }, read from the cache while it is fresh.
+function obj:_collection(run, repo, done)
+    local file = self:_path("cache/" .. core.cacheName(repo))
+    local cached = core.parse(readAll(file))
+    if cached and not core.isStale(hs.fs.attributes(file, "modification"), os.time(), self.cacheDays) then
+        return done(cached)
+    end
     local headers = self.token and { Authorization = "Bearer " .. self.token } or nil
-    hs.http.asyncGet(core.contentsURL(repo, path, hs.http.encodeForQuery), headers, function(status, body)
+    hs.http.asyncGet(core.treeURL(repo), headers, function(status, body)
         if not self:_current(run) then return end
-        local listing = hs.json.decode(body or "")
-        if status ~= 200 or type(listing) ~= "table" then
-            -- Not retried: the usual cause is the rate limit, and asking again only extends it.
-            local reason = type(listing) == "table" and listing.message or ("HTTP " .. tostring(status))
-            log.w(repo .. "/" .. path .. ": " .. tostring(reason))
+        local answer = hs.json.decode(body or "")
+        if status ~= 200 or type(answer) ~= "table" or not answer.tree then
+            local reason = type(answer) == "table" and answer.message or ("HTTP " .. tostring(status))
+            log.w(repo .. ": " .. tostring(reason))
+            -- An old list still finds pictures. Without one the change stops here: the usual
+            -- cause is the rate limit, and asking another collection only extends it.
+            if cached then done(cached) end
             return
         end
-        local images, dirs = core.split(listing)
-        if #images > 0 or #dirs == 0 or depth >= MAX_DEPTH then return done(images) end
-        self:_list(run, repo, core.join(path, dirs[math.random(#dirs)]), depth + 1, done)
+        local fresh = { repo = core.canonicalRepo(answer.url) or repo, paths = core.images(answer.tree) }
+        writeAll(file, core.serialize(fresh.repo, fresh.paths))
+        done(fresh)
     end)
 end
 
-function obj:_pick(run, listings)
-    if listings > MAX_LISTINGS then
-        log.w("no usable picture after " .. MAX_LISTINGS .. " folders, keeping the current wallpaper")
+function obj:_pick(run, attempt)
+    if attempt > MAX_SOURCES then
+        log.w("no usable picture after " .. MAX_SOURCES .. " tries, keeping the current wallpaper")
         return
     end
     local source = core.parseSource(self.sources[math.random(#self.sources)])
-    self:_list(run, source.repo, source.path, 1, function(images)
-        local candidates = core.shuffle(core.unseen(images, self:_seen()), math.random)
-        self:_try(run, listings, candidates, 1)
+    self:_collection(run, source.repo, function(collection)
+        local paths = core.unseen(core.under(collection.paths, source.path), self:_seen())
+        self:_try(run, attempt, collection.repo, core.shuffle(paths, math.random), 1)
     end)
 end
 
-function obj:_try(run, listings, candidates, index)
-    local candidate = candidates[index]
-    if not candidate or index > MAX_DOWNLOADS then return self:_pick(run, listings + 1) end
-    local function nextCandidate() self:_try(run, listings, candidates, index + 1) end
+function obj:_try(run, attempt, repo, paths, index)
+    local picture = paths[index]
+    if not picture or index > MAX_DOWNLOADS then return self:_pick(run, attempt + 1) end
+    local function nextCandidate() self:_try(run, attempt, repo, paths, index + 1) end
 
-    hs.http.asyncGet(candidate.url, nil, function(status, body)
+    hs.http.asyncGet(core.rawURL(repo, picture, hs.http.encodeForQuery), nil, function(status, body)
         if not self:_current(run) then return end
         if status ~= 200 or not body or #body == 0 then
-            log.d(candidate.name .. ": download failed (HTTP " .. tostring(status) .. ")")
+            log.d(picture .. ": download failed (HTTP " .. tostring(status) .. ")")
             return nextCandidate()
         end
         local download = self:_path(".download")
         local file = assert(io.open(download, "wb"))
         file:write(body)
         file:close()
-        if not self.only4k then return self:_apply(candidate, download) end
+        if not self.only4k then return self:_apply(picture, download) end
 
         -- sips, not hs.image: NSImage reports points, so a 144 dpi picture reads as half its size.
         self._task = hs.task.new("/usr/bin/sips", function(_, output)
             self._task = nil
             if not self:_current(run) then return end
             local width, height = core.pixels(output or "")
-            if core.is4k(width, height) then return self:_apply(candidate, download) end
+            if core.is4k(width, height) then return self:_apply(picture, download) end
             os.remove(download)
             if width then
-                appendLine(self:_path("blocklist.txt"), core.key(candidate.name))
-                log.d(candidate.name .. ": " .. width .. "×" .. height .. ", below 4K")
+                appendLine(self:_path("blocklist.txt"), core.key(picture))
+                log.d(picture .. ": " .. width .. "×" .. height .. ", below 4K")
             else
-                log.d(candidate.name .. ": not a readable picture")
+                log.d(picture .. ": not a readable picture")
             end
             nextCandidate()
         end, { "-g", "pixelWidth", "-g", "pixelHeight", download })
@@ -162,20 +188,20 @@ function obj:_try(run, listings, candidates, index)
     end)
 end
 
-function obj:_apply(candidate, download)
+function obj:_apply(picture, download)
     local previous = {}
     for file in hs.fs.dir(self.dir) do
         if core.isOurs(file) then previous[#previous + 1] = file end
     end
     for _, file in ipairs(previous) do os.remove(self:_path(file)) end
-    local wallpaper = self:_path(core.fileName(os.time(), candidate.name))
+    local wallpaper = self:_path(core.fileName(os.time(), picture))
     assert(os.rename(download, wallpaper))
     hs.screen.mainScreen():desktopImageURL("file://" .. wallpaper)
 
     local history = readLines(self:_path("history.log"))
-    history[#history + 1] = core.key(candidate.name)
+    history[#history + 1] = core.key(picture)
     writeLines(self:_path("history.log"), core.tail(history, self.historySize))
-    log.i(candidate.name)
+    log.i(picture)
 end
 
 --- Fresh4kWallpaper:next() -> self
@@ -184,6 +210,7 @@ end
 function obj:next()
     self._run = self._run + 1
     hs.fs.mkdir(self.dir)
+    hs.fs.mkdir(self:_path("cache"))
     os.remove(self:_path(".download"))
     self:_pick(self._run, 1)
     return self

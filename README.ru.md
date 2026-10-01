@@ -8,7 +8,7 @@
 - Только 4K: всё, что меньше 3840×2160, пропускается и запоминается, второй раз не скачивается.
 - Последние 100 картинок не повторяются.
 - Прошлые обои удаляются, когда приходят следующие.
-- Ставить ничего не нужно: хватает Hammerspoon и `sips`, который есть в macOS.
+- Ставить ничего не нужно, токен GitHub тоже не нужен: хватает Hammerspoon и `sips`, который есть в macOS.
 
 ## Установка
 
@@ -49,13 +49,14 @@ spoon.Fresh4kWallpaper:start()
 
 | Поле | По умолчанию | |
 |---|---|---|
-| `sources` | пять коллекций, см. ниже | `"owner/repo"` или `"owner/repo/path"` на GitHub. Папка, в которой только подпапки, считается набором категорий; одна выбирается случайно. |
+| `sources` | пять коллекций, см. ниже | `"owner/repo"` — все картинки репозитория на GitHub, `"owner/repo/path"` — одна его папка вместе с подпапками. |
 | `only4k` | `true` | Пропускать картинки меньше 3840×2160. |
 | `interval` | `86400` | Секунд между сменами. |
 | `changeOnStart` | `true` | Менять при `start()`. |
 | `historySize` | `100` | Сколько последних картинок не повторять. |
-| `dir` | `~/Pictures/Fresh4kWallpaper` | Текущие обои, `history.log`, `blocklist.txt`. |
-| `token` | нет | Токен GitHub, если 60 запросов в час мало. На одну смену уходит два-три. |
+| `cacheDays` | `7` | Сколько дней список файлов коллекции используется повторно, прежде чем снова спросить GitHub. |
+| `dir` | `~/Pictures/Fresh4kWallpaper` | Текущие обои, `history.log`, `blocklist.txt`, кэш списков файлов. |
+| `token` | нет | Токен GitHub. В обычной работе не нужен, см. ниже. |
 
 Из `dir` удаляются только файлы вида `Fresh4kWallpaper-<время>.<расширение>`; остальные файлы в папке не трогаются.
 
@@ -66,12 +67,16 @@ spoon.Fresh4kWallpaper:start()
 Встроенные коллекции, спасибо их авторам:
 
 - [AngelJumbo/gruvbox-wallpapers](https://github.com/AngelJumbo/gruvbox-wallpapers)
-- [Nix3l/gruvbox-bgs](https://github.com/Nix3l/gruvbox-bgs)
+- [Nix3l/wallpapers](https://github.com/Nix3l/wallpapers)
 - [dharmx/walls](https://github.com/dharmx/walls)
 - [makccr/wallpapers](https://github.com/makccr/wallpapers)
 - [Ajaymanikandan0x/hyprland_wallpapers](https://github.com/Ajaymanikandan0x/hyprland_wallpapers)
 
 В самом Spoon'е картинок нет. Он скачивает по одной из этих репозиториев на ваш Mac; картинки принадлежат их авторам.
+
+## Лимиты GitHub
+
+GitHub отвечает на 60 анонимных запросов к API в час. Spoon один раз спрашивает у каждой коллекции список файлов и хранит его `cacheDays` дней; смена обоев после этого только скачивает картинку, а это не запрос к API. Со встроенными коллекциями выходит пять запросов в неделю, как бы часто Hammerspoon ни перезагружался. Чтобы новые картинки подхватились раньше, удалите `cache/` в `dir`.
 
 ## Тесты
 

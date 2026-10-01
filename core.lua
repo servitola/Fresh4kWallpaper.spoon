@@ -3,6 +3,7 @@ local core = {}
 
 local PREFIX = "Fresh4kWallpaper-"
 local IMAGE_EXTENSIONS = { png = true, jpg = true, jpeg = true, webp = true, heic = true }
+local DAY = 24 * 60 * 60
 
 local function extension(name)
     return (name:match("%.(%w+)$") or ""):lower()
@@ -15,38 +16,73 @@ function core.parseSource(source)
     return { repo = owner .. "/" .. repo, path = (path:gsub("/+$", "")) }
 end
 
-function core.contentsURL(repo, path, encode)
-    return "https://api.github.com/repos/" .. repo .. "/contents/" .. encode(path)
+-- One request lists every file of a repository; cached, it replaces a request per folder on
+-- every change and keeps an anonymous user far from GitHub's 60 requests an hour.
+function core.treeURL(repo)
+    return "https://api.github.com/repos/" .. repo .. "/git/trees/HEAD?recursive=1"
 end
 
-function core.join(path, name)
-    return path == "" and name or path .. "/" .. name
+function core.rawURL(repo, path, encode)
+    return "https://raw.githubusercontent.com/" .. repo .. "/HEAD/" .. encode(path)
 end
 
-function core.split(listing)
-    local images, dirs = {}, {}
-    for _, item in ipairs(listing) do
-        if item.type == "file" and item.download_url and IMAGE_EXTENSIONS[extension(item.name)] then
-            images[#images + 1] = { name = item.name, url = item.download_url }
-        elseif item.type == "dir" and item.name:sub(1, 1) ~= "." then
-            dirs[#dirs + 1] = item.name
+-- The API follows a renamed repository, raw.githubusercontent.com does not: the name the
+-- tree answers with is the one downloads have to use.
+function core.canonicalRepo(treeUrl)
+    return treeUrl and treeUrl:match("/repos/([^/]+/[^/]+)/git/trees/")
+end
+
+function core.cacheName(repo)
+    return (repo:gsub("/", "__")) .. ".txt"
+end
+
+function core.images(tree)
+    local paths = {}
+    for _, item in ipairs(tree or {}) do
+        local hidden = item.path:sub(1, 1) == "." or item.path:find("/.", 1, true)
+        if item.type == "blob" and not hidden and IMAGE_EXTENSIONS[extension(item.path)] then
+            paths[#paths + 1] = item.path
         end
     end
-    return images, dirs
+    return paths
+end
+
+function core.under(paths, folder)
+    if folder == "" then return paths end
+    local prefix, kept = folder .. "/", {}
+    for _, path in ipairs(paths) do
+        if path:sub(1, #prefix) == prefix then kept[#kept + 1] = path end
+    end
+    return kept
 end
 
 -- Some collections mark files with a leading underscore and later drop it;
 -- history and the blocklist must recognise the picture either way.
-function core.key(name)
-    return (name:gsub("^_", ""))
+function core.key(path)
+    return (path:match("([^/]+)$"):gsub("^_", ""))
 end
 
-function core.unseen(images, seen)
+function core.unseen(paths, seen)
     local fresh = {}
-    for _, image in ipairs(images) do
-        if not seen[core.key(image.name)] then fresh[#fresh + 1] = image end
+    for _, path in ipairs(paths) do
+        if not seen[core.key(path)] then fresh[#fresh + 1] = path end
     end
     return fresh
+end
+
+function core.serialize(repo, paths)
+    return repo .. "\n" .. table.concat(paths, "\n") .. "\n"
+end
+
+function core.parse(text)
+    local lines = {}
+    for line in (text or ""):gmatch("[^\n]+") do lines[#lines + 1] = line end
+    if #lines == 0 then return nil end
+    return { repo = table.remove(lines, 1), paths = lines }
+end
+
+function core.isStale(fetchedAt, now, days)
+    return fetchedAt == nil or now - fetchedAt > days * DAY
 end
 
 function core.shuffle(list, random)

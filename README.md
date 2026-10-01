@@ -8,7 +8,7 @@ A new 4K wallpaper every time Hammerspoon starts. One file on disk, ever.
 - 4K only: anything smaller than 3840×2160 is skipped and remembered, so it is never downloaded twice.
 - The last 100 pictures are not repeated.
 - The previous wallpaper is deleted when the next one arrives.
-- Nothing to install: plain Hammerspoon and `sips`, which ships with macOS.
+- Nothing to install and no GitHub token: plain Hammerspoon and `sips`, which ships with macOS.
 
 ## Install
 
@@ -49,13 +49,14 @@ spoon.Fresh4kWallpaper:start()
 
 | Field | Default | |
 |---|---|---|
-| `sources` | five collections, see below | `"owner/repo"` or `"owner/repo/path"` on GitHub. A folder holding only subfolders is a set of categories; one is picked at random. |
+| `sources` | five collections, see below | `"owner/repo"` for every picture in a GitHub repository, `"owner/repo/path"` for one folder of it, subfolders included. |
 | `only4k` | `true` | Skip pictures below 3840×2160. |
 | `interval` | `86400` | Seconds between changes. |
 | `changeOnStart` | `true` | Change on `start()`. |
 | `historySize` | `100` | Recent pictures that are not repeated. |
-| `dir` | `~/Pictures/Fresh4kWallpaper` | The current wallpaper, `history.log`, `blocklist.txt`. |
-| `token` | none | A GitHub token, if 60 requests an hour is not enough. A change takes two or three. |
+| `cacheDays` | `7` | How long a collection's file list is reused before GitHub is asked again. |
+| `dir` | `~/Pictures/Fresh4kWallpaper` | The current wallpaper, `history.log`, `blocklist.txt`, cached file lists. |
+| `token` | none | A GitHub token. Not needed in normal use, see below. |
 
 Only files named `Fresh4kWallpaper-<time>.<ext>` are ever deleted from `dir`; other files in it are left alone.
 
@@ -66,12 +67,16 @@ The wallpaper is set on the main screen, for the Space that is in front.
 Built in, with thanks to the people who collected them:
 
 - [AngelJumbo/gruvbox-wallpapers](https://github.com/AngelJumbo/gruvbox-wallpapers)
-- [Nix3l/gruvbox-bgs](https://github.com/Nix3l/gruvbox-bgs)
+- [Nix3l/wallpapers](https://github.com/Nix3l/wallpapers)
 - [dharmx/walls](https://github.com/dharmx/walls)
 - [makccr/wallpapers](https://github.com/makccr/wallpapers)
 - [Ajaymanikandan0x/hyprland_wallpapers](https://github.com/Ajaymanikandan0x/hyprland_wallpapers)
 
 The Spoon ships no pictures. It downloads one at a time from these repositories to your Mac; the pictures belong to their authors.
+
+## GitHub limits
+
+GitHub answers 60 anonymous API requests an hour. The Spoon asks once per collection for the list of its files and keeps the list for `cacheDays`; changing the wallpaper then only downloads a picture, which is not an API request. With the built-in collections that is five requests a week, however often Hammerspoon reloads. To pick up new pictures sooner, delete `cache/` in `dir`.
 
 ## Tests
 
